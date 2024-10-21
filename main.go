@@ -22,7 +22,12 @@ type server struct {
 	n                *maelstrom.Node
 	receivedTopology map[string]any
 	vectorClock      map[string]int
-	events           []event
+
+	//node sync state
+	sentEvents map[string]int
+	vClocks    map[string]map[string]int
+
+	events []event
 	//mutex is the simplest possible solution for now. Iterate!!
 	eventsLock sync.RWMutex
 
@@ -68,10 +73,10 @@ func (s *server) handleBroadcast(msg maelstrom.Message) error {
 
 	//increment vector clock
 	if strings.Contains(msgFrom, "c") {
-		s.vectorClock[msgDest] += 1
 		s.eventsLock.Lock()
 		s.events = append(s.events, event{msgDest, msgFrom + strconv.Itoa(int(body["msg_id"].(float64))), int(body["message"].(float64)), s.vectorClock})
 		s.eventsLock.Unlock()
+		s.vectorClock[msgDest] += 1
 	} else {
 		// do nothing for now, and for the echo case
 	}
@@ -110,9 +115,30 @@ func (s *server) applyEvents() error {
 	return nil
 }
 
+func (s *server) sendEvents() error {
+	s.eventsLock.RLock()
+	defer s.eventsLock.RUnlock()
+	for _, n := range s.n.NodeIDs() {
+		if n == s.n.ID() {
+			continue
+		} else {
+			for i := s.sentEvents[n]; i < len(s.events); i++ {
+				eventVectorClock := s.events[i].vectorClockBefore
+
+			}
+		}
+	}
+	return nil
+}
+
 func (s *server) handleInit(msg maelstrom.Message) error {
 	for _, aNode := range s.n.NodeIDs() {
 		s.vectorClock[aNode] = 0
+		s.sentEvents[aNode] = 0
+
+		for _, bNode := range s.n.NodeIDs() {
+			s.vClocks[aNode][bNode] = 0
+		}
 	}
 	return nil
 }
@@ -143,6 +169,8 @@ func main() {
 			maelstrom.NewNode(),
 			make(map[string]any),
 			make(map[string]int),
+			make(map[string]int),
+			make(map[string]map[string]int),
 			make([]event, 0),
 			sync.RWMutex{},
 			make(map[string]int),
@@ -154,23 +182,6 @@ func main() {
 	s.n.Handle("broadcast", s.handleBroadcast)
 	s.n.Handle("read", s.handleRead)
 	s.n.Handle("topology", s.handleTopology)
-	// Execute the node's message loop. This will run until STDIN is closed.
-	// n.Handle("topology", func(msg maelstrom.Message) error {
-	// 	// Unmarshal the message body as an loosely-typed map.
-	// 	var body map[string]any
-	// 	if err := json.Unmarshal(msg.Body, &body); err != nil {
-	// 		return err
-	// 	}
-
-	// 	receivedTopology = body["topology"].(map[string]any)
-	// 	println(receivedTopology)
-	// 	// Update the message type.
-	// 	delete(body, "topology")
-	// 	body["type"] = "topology_ok"
-	// 	// Echo the original message back with the updated message type.
-	// 	return n.Reply(msg, body)
-	// })
-
 	s.n.Handle("init", s.handleInit)
 
 	go s.periodicApplyEvents()
