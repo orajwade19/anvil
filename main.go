@@ -38,34 +38,10 @@ type server struct {
 	eventsLock sync.RWMutex
 
 	//underlying data structure to store all received messages
-	receivedMessages map[string]int
-	appliedEvents    int
-	newEvent         chan bool
-}
-
-func (s *server) handleEcho(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
-		return err
-	}
-	//store event in slice of events
-	msgFrom := msg.Src
-	msgDest := msg.Dest
-	log.Println("EVENT LIST: ", s.events)
-
-	//increment vector clock
-	if strings.Contains(msgFrom, "c") {
-		s.vectorClock[msgDest] += 1
-		s.eventsLock.Lock()
-		s.events = append(s.events, event{msgDest, msgFrom + body["msg_id"].(string), 0, s.vectorClock})
-		s.eventsLock.Unlock()
-	} else {
-		// do nothing for now, and for the echo case
-	}
-
-	//actual echo reply with echo_ok
-	body["type"] = "echo_ok"
-	return s.n.Reply(msg, body)
+	receivedMessages     map[string]int
+	appliedEvents        int
+	newApplyEventTrigger chan bool
+	newSendEventTrigger  chan bool
 }
 
 func (s *server) handleBroadcast(msg maelstrom.Message) error {
@@ -82,6 +58,9 @@ func (s *server) handleBroadcast(msg maelstrom.Message) error {
 		s.eventsLock.Lock()
 		s.events = append(s.events, event{msgDest, msgFrom + strconv.Itoa(int(body["msg_id"].(float64))), int(body["message"].(float64)), copyMap(s.vectorClock)})
 		s.eventsLock.Unlock()
+		log.Println("New event added")
+		s.newApplyEventTrigger <- true
+		s.newSendEventTrigger <- true
 		s.vectorClock[msgDest] += 1
 	} else {
 		// do nothing for now, and for the echo case
@@ -90,7 +69,6 @@ func (s *server) handleBroadcast(msg maelstrom.Message) error {
 	//actual echo reply with echo_ok
 	body["type"] = "broadcast_ok"
 	delete(body, "message")
-	s.newEvent <- true
 	return s.n.Reply(msg, body)
 }
 
@@ -115,7 +93,7 @@ func (s *server) handleSync(msg maelstrom.Message) error {
 	}
 	syncMsgId := body["sync_msg_id"].(string)
 	_, exists := s.receivedMessages[syncMsgId]
-	if exists == false {
+	if !exists {
 		msgOrigin := body["origin"].(string)
 		rawVectorClock := body["event_vector_clock"]
 		vectorClockBytes, err := json.Marshal(rawVectorClock)
@@ -131,7 +109,10 @@ func (s *server) handleSync(msg maelstrom.Message) error {
 		s.eventsLock.Lock()
 		s.events = append(s.events, event{msgOrigin, body["sync_msg_id"].(string), int(body["message"].(float64)), receivedVectorClock})
 		s.eventsLock.Unlock()
+
 		s.vectorClock[msgOrigin] += 1
+		s.newApplyEventTrigger <- true
+		s.newSendEventTrigger <- true
 
 	}
 	body["type"] = "sync_ok"
@@ -219,6 +200,7 @@ func (s *server) sendEvents() error {
 			i := s.sentEvents[n]
 			// the node's vector clock should AT LEAST be equal to or greater than the event's preReq vector clock
 			if len(s.events) > i {
+				//this is most likely buggy for now, because it relies on stored vector clock. Will not work for more than 2 nodes
 				nodeHasPreviousEvents := compareVClock(s.events[i].vectorClockBefore, s.vClocks[n])
 				if nodeHasPreviousEvents {
 					go s.sendEvent(n, i, &wg)
@@ -259,14 +241,15 @@ func (s *server) handleInit(msg maelstrom.Message) error {
 func (s *server) periodicApplyEvents() {
 	for {
 		// <-time.After(time.Duration(500) * time.Millisecond)
-		<-s.newEvent
+		<-s.newApplyEventTrigger
 		s.applyEvents()
 	}
 }
 
 func (s *server) periodicSendEvents() {
 	for {
-		<-s.newEvent
+		<-s.newSendEventTrigger
+		log.Println("Calling periodicSendEvents")
 		s.sendEvents()
 	}
 }
@@ -296,9 +279,9 @@ func main() {
 			make(map[string]int),
 			0,
 			make(chan bool),
+			make(chan bool),
 		})
 
-	s.n.Handle("echo", s.handleEcho)
 	s.n.Handle("broadcast", s.handleBroadcast)
 	s.n.Handle("read", s.handleRead)
 	s.n.Handle("topology", s.handleTopology)
