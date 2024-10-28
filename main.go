@@ -133,7 +133,6 @@ func (s *server) applyEvents() error {
 		msgData := s.events[i].msgData
 		s.receivedMessages[msgId] = msgData
 	}
-	log.Println("APPLIED EVENTS : ", s.receivedMessages)
 	return nil
 }
 
@@ -249,7 +248,6 @@ func (s *server) periodicApplyEvents() {
 func (s *server) periodicSendEvents() {
 	for {
 		<-s.newSendEventTrigger
-		log.Println("Calling periodicSendEvents")
 		s.sendEvents()
 	}
 }
