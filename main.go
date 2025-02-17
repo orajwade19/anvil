@@ -39,11 +39,13 @@ type server struct {
 	events     []event
 	eventsLock sync.RWMutex
 
-	receivedMessages     map[string]int
-	receivedMessagesLock sync.RWMutex
-	appliedEvents        int
-	newApplyEventTrigger chan bool
-	newSendEventTrigger  chan bool
+	receivedMessages           map[string]int
+	receivedMessagesLock       sync.RWMutex
+	receivedDeleteMessages     map[string]int
+	receivedDeleteMessagesLock sync.RWMutex
+	appliedEvents              int
+	newApplyEventTrigger       chan bool
+	newSendEventTrigger        chan bool
 }
 
 func (s *server) handleAdd(msg maelstrom.Message) error {
@@ -205,6 +207,15 @@ func (s *server) handleSync(msg maelstrom.Message) error {
 	log.Printf("[UNLOCK] Releasing receivedMessagesLock in handleSync")
 	s.receivedMessagesLock.RUnlock()
 
+	// Then check receivedDeletedMessages with read lock
+	if !exists {
+		log.Printf("[LOCK] Acquiring receivedDeleteMessagesLock for read in handleSync")
+		s.receivedDeleteMessagesLock.RLock()
+		_, exists = s.receivedDeleteMessages[syncMsgId]
+		log.Printf("[UNLOCK] Releasing receivedDeleteMessagesLock in handleSync")
+		s.receivedDeleteMessagesLock.RUnlock()
+	}
+
 	// If not in receivedMessages, check events from appliedEvents forward
 	if !exists {
 		log.Printf("[LOCK] Acquiring eventsLock for read in handleSync")
@@ -300,6 +311,11 @@ func (s *server) applyEvents() error {
 				//not great to use this, but good enough for positive values in the workload
 				s.receivedMessages[msgDeleteElementUid] = -1
 			}
+
+			//not a great solution ?? actually might be ok
+			s.receivedDeleteMessagesLock.Lock()
+			s.receivedDeleteMessages[msgId] = -1
+			s.receivedDeleteMessagesLock.Unlock()
 		}
 
 		log.Printf("[UNLOCK] Releasing receivedMessagesLock in applyEvents")
@@ -528,6 +544,8 @@ func main() {
 			make(map[string]map[string]int),
 			sync.RWMutex{},
 			make([]event, 0),
+			sync.RWMutex{},
+			make(map[string]int),
 			sync.RWMutex{},
 			make(map[string]int),
 			sync.RWMutex{},
