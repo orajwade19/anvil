@@ -19,7 +19,7 @@ type event struct {
 	msgId                 string
 	msgData               int
 	msgType               string
-	deleteMsgUid          string
+	addMsgUidForDelete    string
 	delete_element_exists bool
 	vectorClockBefore     map[string]int
 }
@@ -61,7 +61,8 @@ func (s *server) handleAdd(msg maelstrom.Message) error {
 	s.vectorClockLock.RUnlock()
 	log.Printf("[LOCK] Acquiring eventsLock for write in handleBroadcast")
 	s.eventsLock.Lock()
-	s.events = append(s.events, event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["element"].(float64)), "add", "0", false, vectorClockCopy})
+	new_event := event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["element"].(float64)), "add", "0", false, vectorClockCopy}
+	s.events = append(s.events, new_event)
 	// s.events = append(s.events, event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["delta"].(float64)), vectorClockCopy})
 	log.Printf("[UNLOCK] Releasing eventsLock in handleBroadcast")
 	s.eventsLock.Unlock()
@@ -75,6 +76,7 @@ func (s *server) handleAdd(msg maelstrom.Message) error {
 	s.vectorClockLock.Unlock()
 
 	body["type"] = "add_ok"
+	body["event_id"] = new_event.msgId
 	delete(body, "element")
 	return s.n.Reply(msg, body)
 }
@@ -144,7 +146,8 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 	s.vectorClockLock.RUnlock()
 	log.Printf("[LOCK] Acquiring eventsLock for write in handleDelete")
 	s.eventsLock.Lock()
-	s.events = append(s.events, event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["element"].(float64)), "delete", element_add_uid, element_exists, vectorClockCopy})
+	new_event := event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["element"].(float64)), "delete", element_add_uid, element_exists, vectorClockCopy}
+	s.events = append(s.events, new_event)
 	// s.events = append(s.events, event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["delta"].(float64)), vectorClockCopy})
 	log.Printf("[UNLOCK] Releasing eventsLock in handleDelete")
 	s.eventsLock.Unlock()
@@ -159,6 +162,7 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 
 	// body["type"] = "broadcast_ok"
 	body["type"] = "delete_ok"
+	body["event_id"] = new_event.msgId
 	// delete(body, "message")
 	delete(body, "element")
 	return s.n.Reply(msg, body)
@@ -299,7 +303,7 @@ func (s *server) applyEvents() error {
 
 		msgType := s.events[i].msgType
 		msgDeleteElementExists := s.events[i].delete_element_exists
-		msgDeleteElementUid := s.events[i].deleteMsgUid
+		msgDeleteElementUid := s.events[i].addMsgUidForDelete
 
 		log.Printf("[LOCK] Acquiring receivedMessagesLock for write in applyEvents")
 		s.receivedMessagesLock.Lock()
@@ -379,7 +383,7 @@ func (s *server) sendEvent(eventsCopy []event, n string, i int, wg *sync.WaitGro
 	eventVectorClockBefore := eventsCopy[i].vectorClockBefore
 	msgType := eventsCopy[i].msgType
 	msgDest := n
-	deleteMsgUid := eventsCopy[i].deleteMsgUid
+	deleteMsgUid := eventsCopy[i].addMsgUidForDelete
 	delete_element_exists := eventsCopy[i].delete_element_exists
 
 	body := map[string]any{

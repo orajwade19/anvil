@@ -3,6 +3,9 @@ GO_SRC_DIR = ./
 GO_BINARY = crdt-jepsen
 GO_BINARY_PATH = $(PWD)/bin/$(GO_BINARY)
 JEPSEN_DIR = ../maelstrom
+NODE_COUNT = 3
+TIME_LIMIT = 10
+RATE = 100
 
 # Default target
 .PHONY: all
@@ -20,7 +23,7 @@ build:
 .PHONY: test-jepsen
 test-jepsen: build
 	@echo "Running Jepsen tests..."
-	cd $(JEPSEN_DIR) && lein run test -w or-set --bin $(GO_BINARY_PATH) --node-count 3 --time-limit 15 --rate 5
+	cd $(JEPSEN_DIR) && lein run test -w or-set --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE)
 
 # Clean build artifacts
 .PHONY: clean
