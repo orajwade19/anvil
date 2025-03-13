@@ -9,7 +9,7 @@ RATE = 100
 
 # Default target
 .PHONY: all
-all: build test-jepsen
+all: build test-jepsen-orset
 
 # Build the Go binary
 .PHONY: build
@@ -20,8 +20,8 @@ build:
 	@echo "Build completed: $(GO_BINARY_PATH)"
 
 # Run Jepsen tests
-.PHONY: test-jepsen
-test-jepsen: build
+.PHONY: test-jepsen-orset
+test-jepsen-orset: build
 	@echo "Running Jepsen tests..."
 	cd $(JEPSEN_DIR) && lein run test -w or-set --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE)
 
@@ -38,6 +38,6 @@ help:
 	@echo "Available targets:"
 	@echo "  all         : Build the Go project and run Jepsen tests (default)"
 	@echo "  build       : Build the Go binary only"
-	@echo "  test-jepsen : Run Jepsen tests with the built binary"
+	@echo "  test-jepsen-orset : Run Jepsen tests with the built binary"
 	@echo "  clean       : Remove build artifacts"
 	@echo "  help        : Display this help message"
