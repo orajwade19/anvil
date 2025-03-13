@@ -162,7 +162,7 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 
 	// body["type"] = "broadcast_ok"
 	body["type"] = "delete_ok"
-	body["event_id"] = new_event.msgId
+	body["event_id"] = new_event.addMsgUidForDelete
 	// delete(body, "message")
 	delete(body, "element")
 	return s.n.Reply(msg, body)
