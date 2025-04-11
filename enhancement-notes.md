@@ -1,0 +1,4 @@
+- We can improve performance in two ways : Make the distsys component better and/or make the "CRDT" part better
+- is the seperation of these two actually proper in code? 
+- TODO make sure these two things are actually separate
+- Could handle sending to different nodes differently, reduce "send event" count by one 

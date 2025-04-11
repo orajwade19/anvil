@@ -15,68 +15,83 @@ import (
 )
 
 type event struct {
-	origin                string
-	msgId                 string
-	msgData               int
-	msgType               string
-	addMsgUidForDelete    string
-	delete_element_exists bool
-	vectorClockBefore     map[string]int
+	origin                 string
+	msg_id                 string
+	msg_data               int
+	msg_type               string
+	add_msg_uid_for_delete string
+	delete_element_exists  bool
+	vector_clock_before    map[string]int
 }
 
 type server struct {
-	n                *maelstrom.Node
-	initialized      atomic.Bool
-	receivedTopology map[string]any
-	vectorClock      map[string]int
-	vectorClockLock  sync.RWMutex
+	n                 *maelstrom.Node
+	initialized       atomic.Bool
+	received_topology map[string]any
+	vector_clock      map[string]int
+	vector_clock_lock sync.RWMutex
 
-	sentEvents     map[string]int
-	sentEventsLock sync.RWMutex
-	vClocks        map[string]map[string]int
-	vClocksLock    sync.RWMutex
+	sent_events             map[string]int
+	sent_events_lock        sync.RWMutex
+	node_vector_clocks      map[string]map[string]int
+	node_vector_clocks_lock sync.RWMutex
 
-	events     []event
-	eventsLock sync.RWMutex
+	events      []event
+	events_lock sync.RWMutex
 
-	receivedMessages           map[string]int
-	receivedMessagesLock       sync.RWMutex
-	receivedDeleteMessages     map[string]int
-	receivedDeleteMessagesLock sync.RWMutex
-	appliedEvents              int
-	newApplyEventTrigger       chan bool
-	newSendEventTrigger        chan bool
+	received_messages             map[string]int
+	received_messages_lock        sync.RWMutex
+	received_delete_messages      map[string]int
+	received_delete_messages_lock sync.RWMutex
+	applied_events                int
+	new_apply_event_trigger       chan bool
+	new_send_event_trigger        chan bool
+
+	unique_messages      map[string]struct{}
+	unique_messages_lock sync.RWMutex
 }
 
 func (s *server) handleAdd(msg maelstrom.Message) error {
+	//IMPROVEMENT
+	//not much room to optimize in handle add since we basically just append to event log
 	var body map[string]any
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
-	msgFrom := msg.Src
-	msgDest := msg.Dest
+	msg_from := msg.Src
+	msg_dest := msg.Dest
 
-	s.vectorClockLock.RLock()
-	vectorClockCopy := copyMap(s.vectorClock)
-	s.vectorClockLock.RUnlock()
+	msg_uid := msg_from + ":" + strconv.Itoa(int(body["msg_id"].(float64)))
+
+	s.unique_messages_lock.Lock()
+	s.unique_messages[msg_uid] = struct{}{}
+	s.unique_messages_lock.Unlock()
+
+	//IMPROVEMENT
+	//this makes sense - we're making a copy of a shared data structure, which is the server vector clock
+	//ways to make this more efficient : per key?
+	//discuss
+	//what kind of consistency guarantees do we want to offer for keys?
+	s.vector_clock_lock.RLock()
+	vector_clock_copy := copyMap(s.vector_clock)
+	s.vector_clock_lock.RUnlock()
 	log.Printf("[LOCK] Acquiring eventsLock for write in handleBroadcast")
-	s.eventsLock.Lock()
-	new_event := event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["element"].(float64)), "add", "0", false, vectorClockCopy}
+	s.events_lock.Lock()
+	new_event := event{msg_dest, msg_uid, int(body["element"].(float64)), "add", "0", false, vector_clock_copy}
 	s.events = append(s.events, new_event)
-	// s.events = append(s.events, event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["delta"].(float64)), vectorClockCopy})
 	log.Printf("[UNLOCK] Releasing eventsLock in handleBroadcast")
-	s.eventsLock.Unlock()
+	s.events_lock.Unlock()
 	log.Println("New event added")
-	s.newApplyEventTrigger <- true
-	s.newSendEventTrigger <- true
+	s.new_apply_event_trigger <- true
+	s.new_send_event_trigger <- true
 	log.Printf("[LOCK] Acquiring vectorClockLock for write in handleBroadcast")
-	s.vectorClockLock.Lock()
-	s.vectorClock[msgDest] += 1
+	s.vector_clock_lock.Lock()
+	s.vector_clock[msg_dest] += 1
 	log.Printf("[UNLOCK] Releasing vectorClockLock in handleBroadcast")
-	s.vectorClockLock.Unlock()
+	s.vector_clock_lock.Unlock()
 
 	body["type"] = "add_ok"
-	body["event_id"] = new_event.msgId
+	body["event_id"] = new_event.msg_id
 	delete(body, "element")
 	return s.n.Reply(msg, body)
 }
@@ -91,6 +106,12 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 	msgFrom := msg.Src
 	msgDest := msg.Dest
 
+	msg_uid := msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64)))
+
+	s.unique_messages_lock.Lock()
+	s.unique_messages[msg_uid] = struct{}{}
+	s.unique_messages_lock.Unlock()
+
 	///CHECKING FOR EXISTENCE STARTS HERE
 	///
 	///
@@ -103,8 +124,8 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 
 	// First check receivedMessages with read lock
 	log.Printf("[LOCK] Acquiring receivedMessagesLock for read in handleDelete")
-	s.receivedMessagesLock.RLock()
-	for aMsgId, aMsg := range s.receivedMessages {
+	s.received_messages_lock.RLock()
+	for aMsgId, aMsg := range s.received_messages {
 		//TODO
 		//hacky - don't really have a "set" yet, just collecting added values
 		//actually, this could be considered to be an issue with the test itself, since it never tries to add a
@@ -116,19 +137,19 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 		}
 	}
 	log.Printf("[UNLOCK] Releasing receivedMessagesLock in handleDelete")
-	s.receivedMessagesLock.RUnlock()
+	s.received_messages_lock.RUnlock()
 
 	// If not in receivedMessages, check events from appliedEvents forward
 	if !element_exists {
 		log.Printf("[LOCK] Acquiring eventsLock for read in handleDelete")
-		s.eventsLock.RLock()
+		s.events_lock.RLock()
 		// Only check from appliedEvents index forward
-		for i := s.appliedEvents; i < len(s.events); i++ {
-			if s.events[i].msgData == delete_element {
-				if s.events[i].msgType == "add" {
+		for i := s.applied_events; i < len(s.events); i++ {
+			if s.events[i].msg_data == delete_element {
+				if s.events[i].msg_type == "add" {
 					element_exists = true
-					element_add_uid = s.events[i].msgId
-				} else if s.events[i].msgType == "delete" {
+					element_add_uid = s.events[i].msg_id
+				} else if s.events[i].msg_type == "delete" {
 					if element_exists {
 						element_exists = false
 					}
@@ -136,33 +157,33 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 			}
 		}
 		log.Printf("[UNLOCK] Releasing eventsLock in handleDelete")
-		s.eventsLock.RUnlock()
+		s.events_lock.RUnlock()
 	}
 
 	///	///CHECKING FOR EXISTENCE ENDS HERE
 
-	s.vectorClockLock.RLock()
-	vectorClockCopy := copyMap(s.vectorClock)
-	s.vectorClockLock.RUnlock()
+	s.vector_clock_lock.RLock()
+	vectorClockCopy := copyMap(s.vector_clock)
+	s.vector_clock_lock.RUnlock()
 	log.Printf("[LOCK] Acquiring eventsLock for write in handleDelete")
-	s.eventsLock.Lock()
-	new_event := event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["element"].(float64)), "delete", element_add_uid, element_exists, vectorClockCopy}
+	s.events_lock.Lock()
+	new_event := event{msgDest, msg_uid, int(body["element"].(float64)), "delete", element_add_uid, element_exists, vectorClockCopy}
 	s.events = append(s.events, new_event)
 	// s.events = append(s.events, event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["delta"].(float64)), vectorClockCopy})
 	log.Printf("[UNLOCK] Releasing eventsLock in handleDelete")
-	s.eventsLock.Unlock()
+	s.events_lock.Unlock()
 	log.Println("New event added")
-	s.newApplyEventTrigger <- true
-	s.newSendEventTrigger <- true
+	s.new_apply_event_trigger <- true
+	s.new_send_event_trigger <- true
 	log.Printf("[LOCK] Acquiring vectorClockLock for write in handleDelete")
-	s.vectorClockLock.Lock()
-	s.vectorClock[msgDest] += 1
+	s.vector_clock_lock.Lock()
+	s.vector_clock[msgDest] += 1
 	log.Printf("[UNLOCK] Releasing vectorClockLock in handleDelete")
-	s.vectorClockLock.Unlock()
+	s.vector_clock_lock.Unlock()
 
 	// body["type"] = "broadcast_ok"
 	body["type"] = "delete_ok"
-	body["event_id"] = new_event.addMsgUidForDelete
+	body["event_id"] = new_event.add_msg_uid_for_delete
 	// delete(body, "message")
 	delete(body, "element")
 	return s.n.Reply(msg, body)
@@ -177,8 +198,8 @@ func (s *server) handleRead(msg maelstrom.Message) error {
 	// body["value"] = make([]any, 0)
 	log.Printf("[LOCK] Acquiring receivedMessagesLock for read in handleRead")
 	// tot	al := 0
-	s.receivedMessagesLock.RLock()
-	for _, aMsg := range s.receivedMessages {
+	s.received_messages_lock.RLock()
+	for _, aMsg := range s.received_messages {
 		//TODO
 		//Again, not a great solution to use only non negative values, good enough for prototype
 		if aMsg >= 0 {
@@ -186,7 +207,7 @@ func (s *server) handleRead(msg maelstrom.Message) error {
 		}
 	}
 	log.Printf("[UNLOCK] Releasing receivedMessagesLock in handleRead")
-	s.receivedMessagesLock.RUnlock()
+	s.received_messages_lock.RUnlock()
 	// body["value"] = total
 
 	body["type"] = "read_ok"
@@ -204,41 +225,16 @@ func (s *server) handleSync(msg maelstrom.Message) error {
 	// Check both receivedMessages and events
 	messageExists := false
 
-	// First check receivedMessages with read lock
-	log.Printf("[LOCK] Acquiring receivedMessagesLock for read in handleSync")
-	s.receivedMessagesLock.RLock()
-	_, exists := s.receivedMessages[syncMsgId]
-	log.Printf("[UNLOCK] Releasing receivedMessagesLock in handleSync")
-	s.receivedMessagesLock.RUnlock()
-
-	// Then check receivedDeletedMessages with read lock
-	if !exists {
-		log.Printf("[LOCK] Acquiring receivedDeleteMessagesLock for read in handleSync")
-		s.receivedDeleteMessagesLock.RLock()
-		_, exists = s.receivedDeleteMessages[syncMsgId]
-		log.Printf("[UNLOCK] Releasing receivedDeleteMessagesLock in handleSync")
-		s.receivedDeleteMessagesLock.RUnlock()
-	}
-
-	// If not in receivedMessages, check events from appliedEvents forward
-	if !exists {
-		log.Printf("[LOCK] Acquiring eventsLock for read in handleSync")
-		s.eventsLock.RLock()
-		// Only check from appliedEvents index forward
-		for i := s.appliedEvents; i < len(s.events); i++ {
-			if s.events[i].msgId == syncMsgId {
-				messageExists = true
-				break
-			}
-		}
-		log.Printf("[UNLOCK] Releasing eventsLock in handleSync")
-		s.eventsLock.RUnlock()
-	} else {
-		messageExists = true
-	}
+	s.unique_messages_lock.RLock()
+	_, exists := s.unique_messages[syncMsgId]
+	messageExists = exists
+	s.unique_messages_lock.RUnlock()
 
 	if !messageExists {
 		log.Println("Processing new message")
+		s.unique_messages_lock.Lock()
+		s.unique_messages[syncMsgId] = struct{}{}
+		s.unique_messages_lock.Unlock()
 		msgOrigin := body["origin"].(string)
 		msgType := body["msgType"].(string)
 		rawVectorClock := body["event_vector_clock"]
@@ -256,27 +252,27 @@ func (s *server) handleSync(msg maelstrom.Message) error {
 		log.Println("Before applying sync message with msgId", syncMsgId)
 
 		log.Printf("[LOCK] Acquiring eventsLock for write in handleSync")
-		s.eventsLock.Lock()
+		s.events_lock.Lock()
 		s.events = append(s.events, event{msgOrigin, syncMsgId, int(body["element"].(float64)), msgType, body["deleteMsgUid"].(string), body["delete_element_exists"].(bool), receivedVectorClock})
 		// s.events = append(s.events, event{msgOrigin, syncMsgId, int(body["delta"].(float64)), receivedVectorClock})
 		log.Printf("[UNLOCK] Releasing eventsLock in handleSync")
-		s.eventsLock.Unlock()
+		s.events_lock.Unlock()
 
 		log.Printf("[LOCK] Acquiring vectorClockLock for write in handleSync")
-		s.vectorClockLock.Lock()
-		s.vectorClock[msgOrigin] += 1
+		s.vector_clock_lock.Lock()
+		s.vector_clock[msgOrigin] += 1
 		log.Printf("[UNLOCK] Releasing vectorClockLock in handleSync")
-		s.vectorClockLock.Unlock()
+		s.vector_clock_lock.Unlock()
 
-		s.newApplyEventTrigger <- true
-		s.newSendEventTrigger <- true
+		s.new_apply_event_trigger <- true
+		s.new_send_event_trigger <- true
 	}
 
 	log.Printf("Sending sync_ok message with body -- 1: %v", body)
 	body["type"] = "sync_ok"
-	s.vectorClockLock.RLock()
-	body["vector_clock"] = copyMap(s.vectorClock)
-	s.vectorClockLock.RUnlock()
+	s.vector_clock_lock.RLock()
+	body["vector_clock"] = copyMap(s.vector_clock)
+	s.vector_clock_lock.RUnlock()
 	delete(body, "element")
 	delete(body, "msgType")
 	delete(body, "event_vector_clock")
@@ -290,40 +286,40 @@ func (s *server) handleSync(msg maelstrom.Message) error {
 
 func (s *server) applyEvents() error {
 	log.Printf("[LOCK] Acquiring eventsLock for read in applyEvents")
-	s.eventsLock.RLock()
+	s.events_lock.RLock()
 	defer func() {
 		log.Printf("[UNLOCK] Releasing eventsLock in applyEvents")
-		s.eventsLock.RUnlock()
+		s.events_lock.RUnlock()
 	}()
 
-	for i := s.appliedEvents; i < len(s.events); i++ {
-		s.appliedEvents++
-		msgId := s.events[i].msgId
-		msgData := s.events[i].msgData
+	for i := s.applied_events; i < len(s.events); i++ {
+		s.applied_events++
+		msgId := s.events[i].msg_id
+		msgData := s.events[i].msg_data
 
-		msgType := s.events[i].msgType
+		msgType := s.events[i].msg_type
 		msgDeleteElementExists := s.events[i].delete_element_exists
-		msgDeleteElementUid := s.events[i].addMsgUidForDelete
+		msgDeleteElementUid := s.events[i].add_msg_uid_for_delete
 
 		log.Printf("[LOCK] Acquiring receivedMessagesLock for write in applyEvents")
-		s.receivedMessagesLock.Lock()
+		s.received_messages_lock.Lock()
 		if msgType == "add" {
-			s.receivedMessages[msgId] = msgData
+			s.received_messages[msgId] = msgData
 		} else {
 			if msgDeleteElementExists {
 				//TODO
 				//not great to use this, but good enough for positive values in the workload
-				s.receivedMessages[msgDeleteElementUid] = -1
+				s.received_messages[msgDeleteElementUid] = -1
 			}
 
 			//not a great solution ?? actually might be ok
-			s.receivedDeleteMessagesLock.Lock()
-			s.receivedDeleteMessages[msgId] = -1
-			s.receivedDeleteMessagesLock.Unlock()
+			s.received_delete_messages_lock.Lock()
+			s.received_delete_messages[msgId] = -1
+			s.received_delete_messages_lock.Unlock()
 		}
 
 		log.Printf("[UNLOCK] Releasing receivedMessagesLock in applyEvents")
-		s.receivedMessagesLock.Unlock()
+		s.received_messages_lock.Unlock()
 	}
 	return nil
 }
@@ -334,7 +330,7 @@ func (s *server) handleVectorClockSync(msg maelstrom.Message) error {
 		return err
 	}
 	body["type"] = "vector_clock_sync_ok"
-	body["vector_clock"] = copyMap(s.vectorClock)
+	body["vector_clock"] = copyMap(s.vector_clock)
 	return s.n.Reply(msg, body)
 }
 
@@ -366,10 +362,10 @@ func (s *server) getUpdatedVectorClock(n string, i int, wg *sync.WaitGroup) erro
 		}
 
 		log.Printf("[LOCK] Acquiring vClocksLock for write in getUpdatedVectorClock")
-		s.vClocksLock.Lock()
-		s.vClocks[n] = replyVectorClock
+		s.node_vector_clocks_lock.Lock()
+		s.node_vector_clocks[n] = replyVectorClock
 		log.Printf("[UNLOCK] Releasing vClocksLock in getUpdatedVectorClock")
-		s.vClocksLock.Unlock()
+		s.node_vector_clocks_lock.Unlock()
 	} else {
 		return fmt.Errorf("vector_clock field not found or invalid")
 	}
@@ -377,13 +373,13 @@ func (s *server) getUpdatedVectorClock(n string, i int, wg *sync.WaitGroup) erro
 }
 
 func (s *server) sendEvent(eventsCopy []event, n string, i int, wg *sync.WaitGroup) error {
-	msgId := eventsCopy[i].msgId
-	msgData := eventsCopy[i].msgData
+	msgId := eventsCopy[i].msg_id
+	msgData := eventsCopy[i].msg_data
 	msgOrigin := eventsCopy[i].origin
-	eventVectorClockBefore := eventsCopy[i].vectorClockBefore
-	msgType := eventsCopy[i].msgType
+	eventVectorClockBefore := eventsCopy[i].vector_clock_before
+	msgType := eventsCopy[i].msg_type
 	msgDest := n
-	deleteMsgUid := eventsCopy[i].addMsgUidForDelete
+	deleteMsgUid := eventsCopy[i].add_msg_uid_for_delete
 	delete_element_exists := eventsCopy[i].delete_element_exists
 
 	body := map[string]any{
@@ -411,9 +407,9 @@ func (s *server) sendEvent(eventsCopy []event, n string, i int, wg *sync.WaitGro
 			return err
 		}
 		if body["type"] == "sync_ok" {
-			s.sentEventsLock.Lock()
-			s.sentEvents[msgDest] = i + 1
-			s.sentEventsLock.Unlock()
+			s.sent_events_lock.Lock()
+			s.sent_events[msgDest] = i + 1
+			s.sent_events_lock.Unlock()
 			if rawVectorClock, ok := body["vector_clock"].(map[string]any); ok {
 				replyVectorClock := make(map[string]int)
 				for k, v := range rawVectorClock {
@@ -425,10 +421,10 @@ func (s *server) sendEvent(eventsCopy []event, n string, i int, wg *sync.WaitGro
 				}
 
 				log.Printf("[LOCK] Acquiring vClocksLock for write in sendEvent")
-				s.vClocksLock.Lock()
-				s.vClocks[msgDest] = replyVectorClock
+				s.node_vector_clocks_lock.Lock()
+				s.node_vector_clocks[msgDest] = replyVectorClock
 				log.Printf("[UNLOCK] Releasing vClocksLock in sendEvent")
-				s.vClocksLock.Unlock()
+				s.node_vector_clocks_lock.Unlock()
 			} else {
 				return fmt.Errorf("vector_clock field not found or invalid")
 			}
@@ -442,22 +438,22 @@ func (s *server) sendEvents() error {
 	defer log.Println("Finished sendEvents")
 	log.Println("Starting sendEvents")
 	log.Printf("[LOCK] Acquiring eventsLock for read in sendEvents")
-	s.eventsLock.RLock()
+	s.events_lock.RLock()
 	eventsCopy := deepCopyEvents(s.events)
 	log.Printf("[UNLOCK] Releasing eventsLock in sendEvents")
-	s.eventsLock.RUnlock()
+	s.events_lock.RUnlock()
 
 	wg := sync.WaitGroup{}
 	for _, n := range s.n.NodeIDs() {
 		if n == s.n.ID() {
 			continue
 		} else {
-			s.sentEventsLock.RLock()
-			i := s.sentEvents[n]
-			s.sentEventsLock.RUnlock()
+			s.sent_events_lock.RLock()
+			i := s.sent_events[n]
+			s.sent_events_lock.RUnlock()
 			if len(eventsCopy) > i {
 				log.Println("For node and index: ", n, i)
-				nodeHasPreviousEvents := compareVClock(eventsCopy[i].vectorClockBefore, s.vClocks[n])
+				nodeHasPreviousEvents := compareVClock(eventsCopy[i].vector_clock_before, s.node_vector_clocks[n])
 				if nodeHasPreviousEvents {
 					wg.Add(1)
 					go s.sendEvent(eventsCopy, n, i, &wg)
@@ -486,12 +482,12 @@ func compareVClock(eventVectorClockBefore map[string]int, nodeVectorClock map[st
 
 func (s *server) handleInit(msg maelstrom.Message) error {
 	for _, aNode := range s.n.NodeIDs() {
-		s.vectorClock[aNode] = 0
-		s.sentEvents[aNode] = 0
-		s.vClocks[aNode] = make(map[string]int)
+		s.vector_clock[aNode] = 0
+		s.sent_events[aNode] = 0
+		s.node_vector_clocks[aNode] = make(map[string]int)
 
 		for _, bNode := range s.n.NodeIDs() {
-			s.vClocks[aNode][bNode] = 0
+			s.node_vector_clocks[aNode][bNode] = 0
 		}
 	}
 	s.initialized.Store(true)
@@ -501,7 +497,7 @@ func (s *server) handleInit(msg maelstrom.Message) error {
 func (s *server) periodicApplyEvents() {
 	for {
 		if s.initialized.Load() {
-			<-s.newApplyEventTrigger
+			<-s.new_apply_event_trigger
 			s.applyEvents()
 		}
 	}
@@ -517,7 +513,7 @@ func (s *server) periodicSendEvents() {
 			case <-timer.C:
 				log.Println("Sending events due to timer")
 				s.sendEvents()
-			case <-s.newSendEventTrigger:
+			case <-s.new_send_event_trigger:
 				s.sendEvents()
 			}
 		}
@@ -529,7 +525,7 @@ func (s *server) handleTopology(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
-	s.receivedTopology = body["topology"].(map[string]any)
+	s.received_topology = body["topology"].(map[string]any)
 	body["type"] = "topology_ok"
 	delete(body, "topology")
 	return s.n.Reply(msg, body)
@@ -556,6 +552,8 @@ func main() {
 			0,
 			make(chan bool, 10),
 			make(chan bool, 10),
+			make(map[string]struct{}),
+			sync.RWMutex{},
 		})
 
 	// s.n.Handle("broadcast", s.handleBroadcast)

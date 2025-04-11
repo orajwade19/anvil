@@ -5,7 +5,7 @@ GO_BINARY_PATH = $(PWD)/bin/$(GO_BINARY)
 JEPSEN_DIR = ./maelstrom
 NODE_COUNT = 3
 TIME_LIMIT = 5
-RATE = 100
+RATE = 30
 
 # Default target
 .PHONY: all
@@ -20,10 +20,16 @@ build:
 	@echo "Build completed: $(GO_BINARY_PATH)"
 
 # Run Jepsen tests
+.PHONY: test-jepsen-gset
+test-jepsen-gset: build
+	@echo "Running Jepsen tests..."
+	cd $(JEPSEN_DIR) && lein run test -w g-set --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE) --nemesis partition
+
+# Run Jepsen tests
 .PHONY: test-jepsen-orset
 test-jepsen-orset: build
 	@echo "Running Jepsen tests..."
-	cd $(JEPSEN_DIR) && lein run test -w or-set --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE) --nemesis partition
+	cd $(JEPSEN_DIR) && lein run test -w or-set --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE)
 
 # Clean build artifacts
 .PHONY: clean

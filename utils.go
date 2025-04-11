@@ -26,9 +26,9 @@ func deepCopyEvents(original []event) []event {
 		copied[i] = v
 
 		// Create a new map for vectorClockBefore to ensure deep copy
-		copied[i].vectorClockBefore = make(map[string]int)
-		for key, value := range v.vectorClockBefore {
-			copied[i].vectorClockBefore[key] = value
+		copied[i].vector_clock_before = make(map[string]int)
+		for key, value := range v.vector_clock_before {
+			copied[i].vector_clock_before[key] = value
 		}
 	}
 
