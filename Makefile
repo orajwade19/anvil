@@ -31,6 +31,13 @@ test-jepsen-orset: build
 	@echo "Running Jepsen tests..."
 	cd $(JEPSEN_DIR) && lein run test -w or-set --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE)
 
+# Run Jepsen tests - passing in time limit and other stuff does not work for now
+.PHONY: test-jepsen-orset-perf
+test-jepsen-orset-perf: build
+	@echo "Running Jepsen tests..."
+	cd $(JEPSEN_DIR) && lein run test -w or-set-perf --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE)
+
+
 # Clean build artifacts
 .PHONY: clean
 clean:
