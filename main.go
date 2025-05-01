@@ -382,6 +382,15 @@ func (s *server) sendEvent(eventsCopy []event, n string, i int, wg *sync.WaitGro
 	deleteMsgUid := eventsCopy[i].add_msg_uid_for_delete
 	delete_element_exists := eventsCopy[i].delete_element_exists
 
+	if msgOrigin == n {
+
+		s.sent_events_lock.Lock()
+		s.sent_events[msgDest] = i + 1
+		s.sent_events_lock.Unlock()
+		wg.Done()
+		return nil
+	}
+
 	body := map[string]any{
 		"type":    "sync",
 		"element": msgData,
