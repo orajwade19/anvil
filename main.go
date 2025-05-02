@@ -19,7 +19,7 @@ type event struct {
 	msg_id                 string
 	msg_data               int
 	msg_type               string
-	add_msg_uid_for_delete string
+	add_msg_uid_for_delete []string
 	delete_element_exists  bool
 	vector_clock_before    map[string]int
 }
@@ -77,7 +77,7 @@ func (s *server) handleAdd(msg maelstrom.Message) error {
 	s.vector_clock_lock.RUnlock()
 	log.Printf("[LOCK] Acquiring eventsLock for write in handleBroadcast")
 	s.events_lock.Lock()
-	new_event := event{msg_dest, msg_uid, int(body["element"].(float64)), "add", "0", false, vector_clock_copy}
+	new_event := event{msg_dest, msg_uid, int(body["element"].(float64)), "add", []string{}, false, vector_clock_copy}
 	s.events = append(s.events, new_event)
 	log.Printf("[UNLOCK] Releasing eventsLock in handleBroadcast")
 	s.events_lock.Unlock()
@@ -120,20 +120,15 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 
 	// Check both receivedMessages and events
 	element_exists := false
-	element_add_uid := ""
+	element_add_uids := make(map[string]struct{}) // Initialize as a map properly
 
 	// First check receivedMessages with read lock
 	log.Printf("[LOCK] Acquiring receivedMessagesLock for read in handleDelete")
 	s.received_messages_lock.RLock()
 	for aMsgId, aMsg := range s.received_messages {
-		//TODO
-		//hacky - don't really have a "set" yet, just collecting added values
-		//actually, this could be considered to be an issue with the test itself, since it never tries to add a
-		//duplicate value
 		if aMsg == delete_element {
 			element_exists = true
-			element_add_uid = aMsgId
-			break
+			element_add_uids[aMsgId] = struct{}{}
 		}
 	}
 	log.Printf("[UNLOCK] Releasing receivedMessagesLock in handleDelete")
@@ -147,17 +142,26 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 		for i := s.applied_events; i < len(s.events); i++ {
 			if s.events[i].msg_data == delete_element {
 				if s.events[i].msg_type == "add" {
-					element_exists = true
-					element_add_uid = s.events[i].msg_id
+					curr_msg_id := s.events[i].msg_id
+					element_add_uids[curr_msg_id] = struct{}{}
 				} else if s.events[i].msg_type == "delete" {
-					if element_exists {
-						element_exists = false
+					if len(s.events[i].add_msg_uid_for_delete) > 0 {
+						for _, v := range s.events[i].add_msg_uid_for_delete {
+							delete(element_add_uids, v)
+						}
 					}
 				}
 			}
 		}
 		log.Printf("[UNLOCK] Releasing eventsLock in handleDelete")
 		s.events_lock.RUnlock()
+	}
+
+	slice_element_add_uids := make([]string, 0, len(element_add_uids))
+
+	// Iterate through the map and append keys to the slice
+	for key := range element_add_uids {
+		slice_element_add_uids = append(slice_element_add_uids, key)
 	}
 
 	///	///CHECKING FOR EXISTENCE ENDS HERE
@@ -167,7 +171,7 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 	s.vector_clock_lock.RUnlock()
 	log.Printf("[LOCK] Acquiring eventsLock for write in handleDelete")
 	s.events_lock.Lock()
-	new_event := event{msgDest, msg_uid, int(body["element"].(float64)), "delete", element_add_uid, element_exists, vectorClockCopy}
+	new_event := event{msgDest, msg_uid, int(body["element"].(float64)), "delete", slice_element_add_uids, element_exists, vectorClockCopy}
 	s.events = append(s.events, new_event)
 	// s.events = append(s.events, event{msgDest, msgFrom + ":" + strconv.Itoa(int(body["msg_id"].(float64))), int(body["delta"].(float64)), vectorClockCopy})
 	log.Printf("[UNLOCK] Releasing eventsLock in handleDelete")
@@ -249,11 +253,23 @@ func (s *server) handleSync(msg maelstrom.Message) error {
 			log.Println("Error unmarshalling vector clock")
 			return err
 		}
+
+		var deleteMsgUids []string
+		if deleteMsgUidRaw, ok := body["deleteMsgUid"]; ok {
+			if deleteMsgArray, ok := deleteMsgUidRaw.([]interface{}); ok {
+				for _, item := range deleteMsgArray {
+					if str, ok := item.(string); ok {
+						deleteMsgUids = append(deleteMsgUids, str)
+					}
+				}
+			}
+		}
+
 		log.Println("Before applying sync message with msgId", syncMsgId)
 
 		log.Printf("[LOCK] Acquiring eventsLock for write in handleSync")
 		s.events_lock.Lock()
-		s.events = append(s.events, event{msgOrigin, syncMsgId, int(body["element"].(float64)), msgType, body["deleteMsgUid"].(string), body["delete_element_exists"].(bool), receivedVectorClock})
+		s.events = append(s.events, event{msgOrigin, syncMsgId, int(body["element"].(float64)), msgType, deleteMsgUids, body["delete_element_exists"].(bool), receivedVectorClock})
 		// s.events = append(s.events, event{msgOrigin, syncMsgId, int(body["delta"].(float64)), receivedVectorClock})
 		log.Printf("[UNLOCK] Releasing eventsLock in handleSync")
 		s.events_lock.Unlock()
@@ -309,7 +325,11 @@ func (s *server) applyEvents() error {
 			if msgDeleteElementExists {
 				//TODO
 				//not great to use this, but good enough for positive values in the workload
-				s.received_messages[msgDeleteElementUid] = -1
+				if len(msgDeleteElementUid) > 0 {
+					for _, uid := range msgDeleteElementUid {
+						s.received_messages[uid] = -1
+					}
+				}
 			}
 
 			//not a great solution ?? actually might be ok
