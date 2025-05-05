@@ -3,9 +3,9 @@ GO_SRC_DIR = ./
 GO_BINARY = crdt-jepsen
 GO_BINARY_PATH = $(PWD)/bin/$(GO_BINARY)
 JEPSEN_DIR = ./maelstrom
-NODE_COUNT = 3
-TIME_LIMIT = 50
-RATE = 5000
+NODE_COUNT = 2
+TIME_LIMIT = 10
+RATE = 500
 
 # Default target
 .PHONY: all
@@ -30,6 +30,12 @@ test-jepsen-gset: build
 test-jepsen-orset: build
 	@echo "Running Jepsen tests..."
 	cd $(JEPSEN_DIR) && lein run test -w or-set --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE)
+
+# Run Jepsen tests
+.PHONY: test-jepsen-orset-repeat
+test-jepsen-orset-repeat: build
+	@echo "Running Jepsen tests..."
+	cd $(JEPSEN_DIR) && lein run test -w or-set-repeat --bin $(GO_BINARY_PATH) --node-count $(NODE_COUNT) --time-limit $(TIME_LIMIT) --rate $(RATE)
 
 # Run Jepsen tests - passing in time limit and other stuff does not work for now
 .PHONY: test-jepsen-orset-perf
