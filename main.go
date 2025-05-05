@@ -203,10 +203,12 @@ func (s *server) handleRead(msg maelstrom.Message) error {
 	log.Printf("[LOCK] Acquiring receivedMessagesLock for read in handleRead")
 	// tot	al := 0
 	s.received_messages_lock.RLock()
+	seen := make(map[int]bool)
 	for _, aMsg := range s.received_messages {
 		//TODO
 		//Again, not a great solution to use only non negative values, good enough for prototype
-		if aMsg >= 0 {
+		if aMsg >= 0 && !seen[aMsg] {
+			seen[aMsg] = true
 			body["value"] = append(body["value"].([]any), aMsg)
 		}
 	}
