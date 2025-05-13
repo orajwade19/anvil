@@ -39,7 +39,7 @@ type server struct {
 	events      []event
 	events_lock sync.RWMutex
 
-	received_messages             map[string]int
+	received_messages             map[int][]string
 	received_messages_lock        sync.RWMutex
 	received_delete_messages      map[string]int
 	received_delete_messages_lock sync.RWMutex
@@ -125,10 +125,10 @@ func (s *server) handleDelete(msg maelstrom.Message) error {
 	// First check receivedMessages with read lock
 	log.Printf("[LOCK] Acquiring receivedMessagesLock for read in handleDelete")
 	s.received_messages_lock.RLock()
-	for aMsgId, aMsg := range s.received_messages {
-		if aMsg == delete_element {
-			element_exists = true
-			element_add_uids[aMsgId] = struct{}{}
+	values, exists := s.received_messages[delete_element]
+	if exists {
+		for _, value := range values {
+			element_add_uids[value] = struct{}{}
 		}
 	}
 	log.Printf("[UNLOCK] Releasing receivedMessagesLock in handleDelete")
@@ -203,14 +203,8 @@ func (s *server) handleRead(msg maelstrom.Message) error {
 	log.Printf("[LOCK] Acquiring receivedMessagesLock for read in handleRead")
 	// tot	al := 0
 	s.received_messages_lock.RLock()
-	seen := make(map[int]bool)
-	for _, aMsg := range s.received_messages {
-		//TODO
-		//Again, not a great solution to use only non negative values, good enough for prototype
-		if aMsg >= 0 && !seen[aMsg] {
-			seen[aMsg] = true
-			body["value"] = append(body["value"].([]any), aMsg)
-		}
+	for number, _ := range s.received_messages {
+		body["value"] = append(body["value"].([]any), number)
 	}
 	log.Printf("[UNLOCK] Releasing receivedMessagesLock in handleRead")
 	s.received_messages_lock.RUnlock()
@@ -322,19 +316,31 @@ func (s *server) applyEvents() error {
 		log.Printf("[LOCK] Acquiring receivedMessagesLock for write in applyEvents")
 		s.received_messages_lock.Lock()
 		if msgType == "add" {
-			s.received_messages[msgId] = msgData
+			s.received_messages[msgData] = append(s.received_messages[msgData], msgId)
 		} else {
 			if msgDeleteElementExists {
-				//TODO
-				//not great to use this, but good enough for positive values in the workload
 				if len(msgDeleteElementUid) > 0 {
-					for _, uid := range msgDeleteElementUid {
-						s.received_messages[uid] = -1
+					// Remove all elements present in msgDeleteElementUid from s.received_messages[msgData]
+					if messages, ok := s.received_messages[msgData]; ok {
+						updatedMessages := make([]string, 0, len(messages))
+						for _, id := range messages {
+							shouldKeep := true
+							for _, uidToRemove := range msgDeleteElementUid {
+								if id == uidToRemove {
+									shouldKeep = false
+									break
+								}
+							}
+							if shouldKeep {
+								updatedMessages = append(updatedMessages, id)
+							}
+						}
+						s.received_messages[msgData] = updatedMessages
 					}
 				}
 			}
 
-			//not a great solution ?? actually might be ok
+			// not a great solution ?? actually might be ok
 			s.received_delete_messages_lock.Lock()
 			s.received_delete_messages[msgId] = -1
 			s.received_delete_messages_lock.Unlock()
@@ -576,7 +582,7 @@ func main() {
 			sync.RWMutex{},
 			make([]event, 0),
 			sync.RWMutex{},
-			make(map[string]int),
+			make(map[int][]string),
 			sync.RWMutex{},
 			make(map[string]int),
 			sync.RWMutex{},
