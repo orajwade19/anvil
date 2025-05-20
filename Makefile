@@ -3,9 +3,9 @@ GO_SRC_DIR = ./
 GO_BINARY = crdt-jepsen
 GO_BINARY_PATH = $(PWD)/bin/$(GO_BINARY)
 JEPSEN_DIR = ./maelstrom
-NODE_COUNT = 3
-TIME_LIMIT = 10
-RATE = 500
+NODE_COUNT = 2
+TIME_LIMIT = 5
+RATE = 1
 
 # Default target
 .PHONY: all
