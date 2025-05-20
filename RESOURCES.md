@@ -6,7 +6,8 @@ Here's some resources for learning more about CRDTs that we found during our wor
 
 ## Papers and Documentation
 - [Approaches to Conflict-free Replicated Data Types](https://dl.acm.org/doi/10.1145/3695249) - CRDT Survey Paper
-- [CRDTs: The Hard Parts](https://martin.kleppmann.com/papers/bft-crdt-papoc22.pdf) - Paper by Martin Kleppmann
+- [CRDTs : The hard parts](https://www.youtube.com/watch?v=x7drE24geUw) - great video by Martin Kleppmann
+- [Making CRDTs Byzantine Fault Tolerant](https://martin.kleppmann.com/papers/bft-crdt-papoc22.pdf) - Paper by Martin Kleppmann
 - [Another CRDT Paper](https://dl.acm.org/doi/abs/10.1002/smr.2555)
 
 ## General Resources
