@@ -1,5 +1,25 @@
-# maelstrom-broadcast: ORSet CRDT Implementation
+# Anvil: ORSet CRDT Implementation
+## Overview
+This project was completed at Stony Brook University under the supervision of Professor Mohammad Javad Amiri. It focuses on operation-based Conflict-free Replicated Data Types (CRDTs) for eventually consistent distributed systems.
 
+## Project Objectives
+
+### Primary Goals
+- **CRDT Implementation**: Develop a practical framework for op-based CRDTs to achieve eventual consistency in distributed systems
+- **Testing Methodology**: Apply Jepsen and property-based testing techniques using Clojure to verify correctness
+- **Knowledge Transfer**: Create a well-documented repository enabling others to extend our work and implement additional CRDTs
+- **Performance Analysis**: Conduct comprehensive benchmarking via Maelstrom to evaluate different CRDT designs under various workloads
+
+### Secondary Goals
+- Gain practical experience with Clojure programming
+- Understand the trade-offs between CRDT design choices
+- Iteratively refine implementations while maintaining correctness guarantees
+
+## Technologies Used
+- **Clojure**: Primary implementation language
+- **Jepsen**: Distributed systems testing framework
+- **Maelstrom**: Network simulation tool for performance benchmarking
+- **CRDTs**: Eventually consistent replicated data structures 
 A Go implementation of an Observed-Remove Set (ORSet) CRDT that works with [Jepsen's Maelstrom](https://github.com/jepsen-io/maelstrom) distributed systems testing framework.
 
 ## Architecture
